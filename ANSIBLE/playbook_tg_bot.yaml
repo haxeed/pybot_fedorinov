@@ -1,0 +1,245 @@
+- name: SetupDatabases
+  hosts: host01, host02
+  become: yes
+
+  tasks:
+    - name: install SQL
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - libpq-dev
+        state: latest
+
+- name: MasterDB
+  hosts: host01
+  become: yes
+
+  tasks:
+    - name: Create DB
+      become_user: postgres
+      become: yes
+      shell: |
+         psql -c "SELECT 1" -d {{ DB_DATABASE }} || psql -c "CREATE DATABASE {{ DB_DATABASE }}"
+
+    - name: Create tables & roles
+      become_user: postgres
+      become: yes
+      shell: |
+        psql -v --username "{{ DB_USER }}" --dbname "{{ DB_DATABASE }}" <<-END
+          CREATE TABLE IF NOT EXISTS Emails (id SERIAL PRIMARY KEY, Email VARCHAR(100) NOT NULL);
+          CREATE TABLE IF NOT EXISTS PhoneNumbers (id SERIAL PRIMARY KEY, phone VARCHAR(20) NOT NULL);
+          ALTER USER "{{ DB_USER }}" WITH PASSWORD '{{ DB_PASSWORD }}';
+          DROP ROLE IF EXISTS {{ DB_REPL_USER }};
+          CREATE ROLE {{ DB_REPL_USER }} WITH REPLICATION PASSWORD '{{ DB_REPL_PASSWORD }}' LOGIN;
+        END
+
+    - name: Find PostgreSQL config directory
+      find:
+        paths: /etc/postgresql/
+        file_type: directory
+      register: postgres_dirs
+
+    - name: Set PostgreSQL version
+      set_fact:
+        postgres_version: "{{ postgres_dirs.files[0].path | basename }}"
+
+    - name: Create archive directory
+      ansible.builtin.file:
+        path: /oracle/pg_data/archive
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: 0755
+        recurse: yes
+
+    - name: Change postgresql.conf (MASTER)
+      become: yes
+      blockinfile:
+        path: /etc/postgresql/{{ postgres_version }}/main/postgresql.conf
+        block: |
+          listen_addresses = '*'
+          port = {{ DB_PORT }}
+          logging_collector = on
+          log_directory = '/var/log/postgresql/'
+          log_filename = 'postgresql.log'
+          archive_mode = on
+          archive_command = 'cp %p /oracle/pg_data/archive/%f'
+          wal_level = replica
+          wal_log_hints = on
+          max_wal_senders = 10
+          password_encryption = scram-sha-256
+          log_replication_commands = on
+        backup: yes
+        create: yes
+        owner: postgres
+        group: postgres
+        mode: 0644
+      
+    - name: Change pg_hba.conf
+      become: yes
+      blockinfile:
+        path: /etc/postgresql/{{ postgres_version }}/main/pg_hba.conf
+        block: |
+          local all {{ DB_USER }} peer
+          host all all 0.0.0.0/0 password
+          host replication {{ DB_REPL_USER }} 0.0.0.0/0 scram-sha-256
+
+    - name: Restart service
+      become: yes
+      service:
+        name: postgresql
+        state: restarted
+        enabled: yes
+
+    - name: Change logs permissions
+      become: yes
+      command: sudo chmod -R 777 /var/log/postgresql
+
+- name: ReplDB
+  hosts: host02
+  become: yes
+
+  tasks:
+    - name: Find PostgreSQL config directory
+      find:
+        paths: /etc/postgresql/
+        file_type: directory
+      register: postgres_dirs
+
+    - name: Set PostgreSQL version
+      set_fact:
+        postgres_version: "{{ postgres_dirs.files[0].path | basename }}"
+
+    - name: Remove old files
+      command: rm -rf /var/lib/postgresql/{{ postgres_version }}/
+
+    - name: Changing postgresql.conf (REPL)
+      become: yes
+      blockinfile:
+        path: /etc/postgresql/{{ postgres_version }}/main/postgresql.conf
+        block: |
+          listen_addresses = '*'
+          port = {{ DB_REPL_PORT }}
+
+    - name: Set IPv4 for master
+      set_fact:
+        master_ip: "{{ hostvars['host01']['ansible_host'] }}"
+
+    - name: Using pg_basebackup
+      command: pg_basebackup -R -h {{ master_ip }} -U {{ DB_REPL_USER }} -D /var/lib/postgresql/{{ postgres_version }}/main -P
+      environment:
+        PGPASSWORD: "{{ DB_REPL_PASSWORD }}"
+
+    - name: Change owners
+      become: yes
+      command: chown -R postgres:postgres /var/lib/postgresql/
+    
+    - name: Restart service
+      become: yes
+      service:
+        name: postgresql
+        state: restarted
+        enabled: yes
+
+- name: Pybot
+  hosts: host03
+  become: yes
+
+  tasks:
+    - name: Update && upgrade
+      become: yes
+      apt:
+        update_cache: yes
+        upgrade: 'yes'
+
+    - name: Install packages for bot
+      become: yes
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - git
+        state: latest
+    
+    - name: Make directory for app
+      become: yes
+      ansible.builtin.file:
+        path: /root/app
+        state: directory
+        owner: root
+        group: root
+        mode: 0755
+        recurse: yes
+
+    - name: Download git repository
+      become: yes
+      git:
+        repo: "{{ github_repository }}"
+        dest: "/root/app"
+        version: docker
+
+    - name: Unpack what is needed & Remove what is not
+      become: yes
+      shell: |
+        mv /root/app/DOCKER/bot_image/main.py /root/app/main.py
+        mv /root/app/DOCKER/bot_image/requirements.txt /root/app/requirements.txt
+        rm -rf /root/app/DOCKER
+    
+    - name: Change some functions
+      become: yes
+      ansible.builtin.blockinfile:
+        path: /root/app/main.py
+        marker: "{mark}"
+        marker_begin: "############################################################### get_repl_logs"
+        marker_end: "def ConnectDB():"
+        block: |
+          def get_repl_logs(update: Update, context):    
+              update.message.reply_text('Replication logs:')
+              host = os.getenv('DB_HOST')
+              port = 22
+              username = '{{ hostvars['host01']['ansible_user'] }}'
+              password = '{{ hostvars['host01']['ansible_password'] }}'
+              client = paramiko.SSHClient()
+              client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+              client.connect(hostname=host, username=username, password=password, port=port)
+              stdin, stdout, stderr = client.exec_command('sudo cat /var/log/postgresql/postgresql.log | grep repl | tail -20')
+              data = stdout.read() + stderr.read()
+              client.close()
+              data = str(data).replace('\\n', '\n').replace('\\t', '\t')[2:-1]
+              update.message.reply_text(data)  
+              return ConversationHandler.END
+        state: present
+          
+    - name: Add .env
+      become: yes
+      copy:
+        src: .env
+        dest: /root/app/.env
+    
+    - name: Add DB hosts (to set connection via psycopg2)
+      become: yes
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ item }}"
+        state: present
+        insertbefore: BOF
+      loop:
+        - "{{ hostvars['host01']['ansible_host'] }} {{ DB_HOST }}"
+        - "{{ hostvars['host02']['ansible_host'] }} {{ DB_REPL_HOST }}"
+
+    - name: Create venv
+      ansible.builtin.command:
+        cmd: python3 -m venv myenv
+
+    - name: Install modules for bot via pip
+      command: myenv/bin/pip install -r /root/app/requirements.txt
+      environment:
+        PATH: "myenv/bin:{{ ansible_env.PATH }}"
+    
+    - name: Start bot
+      become: yes
+      shell: myenv/bin/python3 /root/app/main.py &
+      environment:
+        PATH: "myenv/bin:{{ ansible_env.PATH }}"

@@ -1,0 +1,33 @@
+all:
+  vars:
+    TOKEN: "{{ lookup('pipe', 'grep TOKEN .env | cut -d= -f2') }}"
+    RM_HOST: "{{ lookup('pipe', 'grep RM_HOST .env | cut -d= -f2') }}"
+    RM_PORT: "{{ lookup('pipe', 'grep RM_PORT .env | cut -d= -f2') }}"
+    RM_USER: "{{ lookup('pipe', 'grep RM_USER .env | cut -d= -f2') }}"
+    RM_PASSWORD: "{{ lookup('pipe', 'grep RM_PASSWORD .env | cut -d= -f2') }}"
+    DB_USER: "{{ lookup('pipe', 'grep DB_USER .env | cut -d= -f2') }}"
+    DB_PASSWORD: "{{ lookup('pipe', 'grep DB_PASSWORD .env | cut -d= -f2') }}"
+    DB_HOST: "{{ lookup('pipe', 'grep DB_HOST .env | cut -d= -f2') }}"
+    DB_PORT: "{{ lookup('pipe', 'grep DB_PORT .env | cut -d= -f2') }}"
+    DB_DATABASE: "{{ lookup('pipe', 'grep DB_DATABASE .env | cut -d= -f2') }}"
+    DB_REPL_USER: "{{ lookup('pipe', 'grep DB_REPL_USER .env | cut -d= -f2') }}"
+    DB_REPL_PASSWORD: "{{ lookup('pipe', 'grep DB_REPL_PASSWORD .env | cut -d= -f2') }}"
+    DB_REPL_HOST: "{{ lookup('pipe', 'grep DB_REPL_HOST .env | cut -d= -f2') }}"
+    DB_REPL_PORT: "{{ lookup('pipe', 'grep DB_REPL_PORT .env | cut -d= -f2') }}"
+    github_repository: https://github.com/haxeed/pybot_fedorinov
+
+  hosts:
+    host01:
+      ansible_host: 192.168.23.133
+      ansible_user: ansible
+      ansible_password: ansible
+
+    host02:
+      ansible_host: 192.168.23.134
+      ansible_user: ansible
+      ansible_password: ansible
+
+    host03:
+      ansible_host: 192.168.23.135
+      ansible_user: ansible
+      ansible_password: ansible

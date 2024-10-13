@@ -9,7 +9,7 @@ services:
       - .env
     volumes:
       - ./.env:/app/.env
-      - /var/log/postgresql:/app/masterlog
+      - db_logs:/app/masterlog
 
   db_master:
     build:
@@ -29,7 +29,6 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
       - db_logs:/var/log/postgresql
-      - /var/log/postgresql:/var/log/postgresql
 
   db_repl:
     build:

@@ -1,0 +1,60 @@
+services:
+  pybot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: pybot
+    env_file:
+      - .env
+    volumes:
+      - ./.env:/app/.env
+      - db_logs:/app/masterlog
+
+  db_master:
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    container_name: "${DB_HOST}"
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_DATABASE}
+      - DB_PORT=${DB_PORT}
+      - DB_REPL_USER=${DB_REPL_USER}
+      - DB_REPL_PASSWORD=${DB_REPL_PASSWORD}
+      - DB_REPL_HOST=${DB_REPL_HOST}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - db_logs:/var/log/postgresql
+
+  db_repl:
+    build:
+      context: ./db_repl
+      dockerfile: Dockerfile
+    container_name: "${DB_REPL_HOST}"
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_DATABASE}
+      - DB_PORT=${DB_PORT}
+      - DB_REPL_USER=${DB_REPL_USER}
+      - DB_REPL_PASSWORD=${DB_REPL_PASSWORD}
+      - DB_REPL_HOST=${DB_REPL_HOST}
+      - DB_REPL_PORT=${DB_REPL_PORT}
+      - DB_HOST=${DB_HOST}
+    volumes:
+      - db_repl_data:/var/lib/postgresql/data
+
+volumes:
+  db_data:
+  db_logs:
+  db_repl_data:
+
+networks:
+  default:
+    name: pybot_network
+    driver: bridge
